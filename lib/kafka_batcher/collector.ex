@@ -37,6 +37,7 @@ defmodule KafkaBatcher.Collector do
         storage_impl: KafkaBatcher.Storage.YourTempStorage
 
   """
+  require Logger
 
   defmacro __using__(opts) do
     quote location: :keep, bind_quoted: [opts: opts] do
@@ -69,6 +70,15 @@ defmodule KafkaBatcher.Collector do
       @impl KafkaBatcher.Behaviours.Collector
       def add_events(events) do
         GenServer.call(__MODULE__, {:add_events, events})
+      catch
+        _, reason ->
+          Logger.warning(
+            "KafkaBatcher: Couldn't get through to collector",
+            reason: inspect(reason),
+            collector: __MODULE__
+          )
+
+          {:error, :kafka_unavailible}
       end
 
       @doc """

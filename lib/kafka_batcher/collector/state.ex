@@ -3,7 +3,28 @@ defmodule KafkaBatcher.Collector.State do
   Describes the state of KafkaBatcher.Collector and functions working with it
   """
 
-  alias KafkaBatcher.{Accumulator, Collector.State, Collector.Utils, TempStorage}
+  alias KafkaBatcher.{
+    Accumulator,
+    Collector.State,
+    Collector.Utils,
+    TempStorage
+  }
+
+  require Logger
+
+  @type t :: %State{
+          topic_name: String.t() | nil,
+          config: Keyword.t(),
+          collect_by_partition: boolean(),
+          collector: atom() | nil,
+          locked?: boolean(),
+          last_check_timestamp: non_neg_integer() | nil,
+          ready?: boolean(),
+          timer_ref: :timer.tref() | nil,
+          partitions_count: pos_integer() | nil
+        }
+
+  @accumulator Application.compile_env(:kafka_batcher, :accumulator, Accumulator)
 
   defstruct topic_name: nil,
             config: [],
@@ -17,51 +38,73 @@ defmodule KafkaBatcher.Collector.State do
             timer_ref: nil,
             partitions_count: nil
 
-  def add_events(state, events) do
-    reply =
-      Enum.reduce_while(events, :ok, fn event, _status ->
-        case add_event(Utils.transform_event(event), state) do
-          :ok -> {:cont, :ok}
-          error -> {:halt, error}
-        end
-      end)
+  @spec add_events(t(), [Utils.event()]) :: {:ok, t()} | {:error, term(), t()}
+  def add_events(%State{} = state, events) do
+    case events |> try_to_add_events(state) |> save_failed_events(state) do
+      :ok ->
+        {:ok, state}
 
-    apply_add_event_reply(state, reply)
+      {:error, {reason, _failed_events}} ->
+        {:error, reason, %State{state | locked?: true}}
+    end
   end
 
-  defp add_event(event, %State{collect_by_partition: true, config: config, topic_name: topic_name, partitions_count: count}) do
-    case KafkaBatcher.Collector.Implementation.choose_partition(event, topic_name, config, count) do
-      {:ok, partition} ->
-        Accumulator.add_event(event, topic_name, partition)
+  defp try_to_add_events(events, %State{} = state) do
+    Enum.reduce(events, :ok, fn
+      event, :ok ->
+        event = Utils.transform_event(event)
 
-      error ->
-        save_messages_to_temp_storage([event], topic_name, config)
-        error
+        case add_event(state, event) do
+          :ok -> :ok
+          {:error, reason} -> {:error, {reason, [event]}}
+        end
+
+      event, {:error, {reason, events}} ->
+        {:error, {reason, [Utils.transform_event(event) | events]}}
+    end)
+  end
+
+  defp add_event(%State{} = state, event) do
+    with {:ok, partition} <- choose_partition(state, event) do
+      @accumulator.add_event(event, state.topic_name, partition)
     end
   catch
     _, reason ->
-      save_messages_to_temp_storage([event], topic_name, config)
+      Logger.warning(
+        "KafkaBatcher: Couldn't get through to accumulator",
+        reason: inspect(reason),
+        accumulator: @accumulator
+      )
+
       {:error, reason}
   end
 
-  defp add_event(event, %State{collect_by_partition: false} = state) do
-    Accumulator.add_event(event, state.topic_name)
+  defp choose_partition(%State{collect_by_partition: true} = state, event) do
+    KafkaBatcher.Collector.Implementation.choose_partition(
+      event,
+      state.topic_name,
+      state.config,
+      state.partitions_count
+    )
   end
 
-  defp apply_add_event_reply(state, :ok) do
-    {:ok, state}
+  defp choose_partition(%State{collect_by_partition: false}, _event) do
+    {:ok, nil}
   end
 
-  defp apply_add_event_reply(state, {:error, reason}) do
-    {:error, reason, %State{state | locked?: true}}
-  end
+  defp save_failed_events(:ok, _state), do: :ok
 
-  defp save_messages_to_temp_storage(messages, topic_name, config) do
+  defp save_failed_events(
+         {:error, {_reason, failed_events}} = result,
+         %State{} = state
+       ) do
     TempStorage.save_batch(%TempStorage.Batch{
-      messages: messages,
-      topic: topic_name,
+      messages: Enum.reverse(failed_events),
+      topic: state.topic_name,
       partition: nil,
-      producer_config: config
+      producer_config: state.config
     })
+
+    result
   end
 end
