@@ -76,7 +76,7 @@ defmodule KafkaBatcher.Collector.State do
         accumulator: @accumulator
       )
 
-      {:error, reason}
+      {:error, :accumulator_unavailable}
   end
 
   defp choose_partition(%State{collect_by_partition: true} = state, event) do

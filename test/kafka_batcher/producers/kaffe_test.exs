@@ -1,5 +1,5 @@
 defmodule Producers.KaffeTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: false
   use KafkaBatcher.Mocks
   alias KafkaBatcher.MessageObject
 
