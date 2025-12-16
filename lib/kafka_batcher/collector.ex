@@ -187,6 +187,7 @@ defmodule KafkaBatcher.Collector do
 
       defp build_state(config) do
         %State{
+          client: Keyword.fetch!(config, :client),
           topic_name: Keyword.fetch!(config, :topic_name),
           config: config,
           collect_by_partition: Keyword.fetch!(config, :collect_by_partition),

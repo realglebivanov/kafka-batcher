@@ -39,6 +39,6 @@ defmodule KafkaBatcher.AccumulatorsPoolSupervisor do
   end
 
   def reg_name(args) do
-    :"#{__MODULE__}.#{Keyword.fetch!(args, :topic_name)}"
+    :"#{__MODULE__}.#{Keyword.fetch!(args, :client)}.#{Keyword.fetch!(args, :topic_name)}"
   end
 end

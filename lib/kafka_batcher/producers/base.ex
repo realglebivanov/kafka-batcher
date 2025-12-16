@@ -9,10 +9,12 @@ defmodule KafkaBatcher.Producers.Base do
 
       require Logger
 
-      def produce_list(messages, topic, nil, config) when is_list(messages) and is_binary(topic) and is_list(config) do
-        with {:ok, partitions_count} <- get_partitions_count(topic),
-             grouped_messages <- group_messages(messages, topic, partitions_count, partition_strategy_from(config)),
-             :ok <- produce_list_to_topic(grouped_messages, topic, config) do
+      def produce_list(client, messages, topic, nil, config) when is_list(messages) and is_binary(topic) and is_list(config) do
+        with {:ok, partitions_count} <- get_partitions_count(client, topic),
+             partition_strategy = partition_strategy_from(client, config),
+             grouped_messages <-
+               group_messages(messages, topic, partitions_count, partition_strategy),
+             :ok <- produce_list_to_topic(client, grouped_messages, topic, config) do
           :ok
         else
           error ->
@@ -29,9 +31,9 @@ defmodule KafkaBatcher.Producers.Base do
           {:error, :failed_push_to_kafka}
       end
 
-      def produce_list(messages, topic, partition, config)
+      def produce_list(client, messages, topic, partition, config)
           when is_list(messages) and is_binary(topic) and is_list(config) and is_integer(partition) do
-        produce_list_to_topic(%{partition => messages}, topic, config)
+        produce_list_to_topic(client, %{partition => messages}, topic, config)
       rescue
         err ->
           @error_notifier.report(err, stacktrace: __STACKTRACE__)
@@ -50,13 +52,13 @@ defmodule KafkaBatcher.Producers.Base do
         {:error, :internal_error}
       end
 
-      defp produce_list_to_topic(message_list, topic, config) do
+      defp produce_list_to_topic(client, message_list, topic, config) do
         message_list
         |> Enum.reduce_while(:ok, fn {partition, messages}, :ok ->
           Logger.debug("KafkaBatcher: event#produce_list_to_topic topic=#{topic} partition=#{partition}")
           start_time = System.monotonic_time()
 
-          case __MODULE__.do_produce(messages, topic, partition, config) do
+          case __MODULE__.do_produce(client, messages, topic, partition, config) do
             :ok ->
               push_metrics(start_time, topic, partition, messages, telemetry_on?(config))
               {:cont, :ok}
@@ -107,13 +109,14 @@ defmodule KafkaBatcher.Producers.Base do
         )
       end
 
-      defp partition_strategy_from(opts) do
+      defp partition_strategy_from(client, opts) do
         case Keyword.fetch(opts, :partition_strategy) do
           {:ok, partition_strategy} ->
             partition_strategy
 
           :error ->
-            KafkaBatcher.Config.general_producer_config()
+            client
+            |> KafkaBatcher.Config.general_producer_config()
             |> Keyword.get(:partition_strategy, :random)
         end
       end

@@ -16,6 +16,7 @@ defmodule KafkaBatcher.Accumulator.State do
   @json_library Application.compile_env(:kafka_batcher, :json_library, Jason)
 
   @type t :: %State{
+          client: atom(),
           topic_name: binary(),
           partition: non_neg_integer() | nil,
           config: Keyword.t(),
@@ -35,23 +36,27 @@ defmodule KafkaBatcher.Accumulator.State do
           collector: atom() | nil
         }
 
-  defstruct topic_name: nil,
-            partition: nil,
-            config: [],
-            pending_messages: [],
-            last_produced_at: 0,
-            batch_flusher: KafkaBatcher.Accumulator.DefaultBatchFlusher,
-            batch_size: 0,
-            max_wait_time: 0,
-            min_delay: 0,
-            max_batch_bytesize: 0,
-            batch_bytesize: 0,
-            pending_messages_count: 0,
-            producer_config: [],
-            messages_to_produce: [],
-            cleanup_timer_ref: nil,
-            status: :continue,
-            collector: nil
+  @enforce_keys [:client]
+  defstruct @enforce_keys ++
+              [
+                topic_name: nil,
+                partition: nil,
+                config: [],
+                pending_messages: [],
+                last_produced_at: 0,
+                batch_flusher: KafkaBatcher.Accumulator.DefaultBatchFlusher,
+                batch_size: 0,
+                max_wait_time: 0,
+                min_delay: 0,
+                max_batch_bytesize: 0,
+                batch_bytesize: 0,
+                pending_messages_count: 0,
+                producer_config: [],
+                messages_to_produce: [],
+                cleanup_timer_ref: nil,
+                status: :continue,
+                collector: nil
+              ]
 
   @spec add_new_message(State.t(), MessageObject.t(), non_neg_integer()) :: State.t()
   def add_new_message(%State{} = state, %MessageObject{key: key, value: value} = event, now) do

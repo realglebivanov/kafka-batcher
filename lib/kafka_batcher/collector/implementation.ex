@@ -24,12 +24,18 @@ defmodule KafkaBatcher.Collector.Implementation do
     start_accumulators_by_partitions(count, state)
   end
 
-  def start_accumulators(%State{topic_name: topic_name, config: config, collect_by_partition: false} = state) do
-    start_accumulator(topic_name: topic_name, config: config, collector: state.collector)
+  def start_accumulators(%State{collect_by_partition: false} = state) do
+    start_accumulator(
+      client: state.client,
+      topic_name: state.topic_name,
+      config: state.config,
+      collector: state.collector
+    )
   end
 
   defp start_accumulators_by_partitions(count, %State{} = state) do
     opts = [
+      client: state.client,
       topic_name: state.topic_name,
       config: state.config,
       collector: state.collector
@@ -70,7 +76,7 @@ defmodule KafkaBatcher.Collector.Implementation do
 
   @spec store_partition_count(State.t()) :: State.t()
   def store_partitions_count(%State{partitions_count: nil} = state) do
-    case @producer.get_partitions_count(state.topic_name) do
+    case @producer.get_partitions_count(state.client, state.topic_name) do
       {:ok, partitions_count} ->
         %State{state | partitions_count: partitions_count}
 

@@ -9,9 +9,14 @@ defmodule KafkaBatcher.ConnectionManager do
 
   defmodule State do
     @moduledoc "State of ConnectionManager process"
-    defstruct client_started: false, client_pid: nil
+    @enforce_keys [:client]
+    defstruct @enforce_keys ++ [client_started: false, client_pid: nil]
 
-    @type t :: %State{client_started: boolean(), client_pid: nil | pid()}
+    @type t :: %State{
+            client: atom(),
+            client_started: boolean(),
+            client_pid: nil | pid()
+          }
   end
 
   @producer Application.compile_env(:kafka_batcher, :producer_module, KafkaBatcher.Producers.Kaffe)
@@ -21,25 +26,25 @@ defmodule KafkaBatcher.ConnectionManager do
   use GenServer
 
   # Public API
-  @spec start_link() :: :ignore | {:error, any()} | {:ok, pid()}
-  def start_link do
-    GenServer.start_link(__MODULE__, [], name: __MODULE__)
+  @spec start_link(client :: atom()) :: GenServer.on_start()
+  def start_link(client) do
+    GenServer.start_link(__MODULE__, client, name: __MODULE__)
   end
 
   @doc "Returns a specification to start this module under a supervisor"
-  @spec child_spec(nil) :: map()
-  def child_spec(_ \\ nil) do
+  @spec child_spec(client :: atom()) :: Supervisor.child_spec()
+  def child_spec(client) do
     %{
-      id: __MODULE__,
-      start: {__MODULE__, :start_link, []},
+      id: {__MODULE__, client},
+      start: {__MODULE__, :start_link, [client]},
       type: :worker
     }
   end
 
   @doc "Checks that Kafka client is already started"
-  @spec client_started?() :: boolean()
-  def client_started? do
-    GenServer.call(__MODULE__, :client_started?)
+  @spec client_started?(client :: atom()) :: boolean()
+  def client_started?(client) do
+    GenServer.call({__MODULE__, client}, :client_started?)
   end
 
   ##
@@ -47,9 +52,9 @@ defmodule KafkaBatcher.ConnectionManager do
   ##
 
   @impl GenServer
-  def init(_opts) do
+  def init(client) do
     Process.flag(:trap_exit, true)
-    {:ok, %State{}, {:continue, :start_client}}
+    {:ok, %State{client: client}, {:continue, :start_client}}
   end
 
   @impl GenServer
@@ -110,7 +115,7 @@ defmodule KafkaBatcher.ConnectionManager do
   ##
 
   defp connect(state) do
-    case prepare_connection() do
+    case prepare_connection(state) do
       {:ok, pid} ->
         %State{state | client_started: true, client_pid: pid}
 
@@ -120,10 +125,11 @@ defmodule KafkaBatcher.ConnectionManager do
     end
   end
 
-  defp start_producers do
-    KafkaBatcher.Config.get_configs_by_topic_name()
+  defp start_producers(%State{} = state) do
+    state.client
+    |> KafkaBatcher.Config.get_configs_by_topic_name()
     |> Enum.reduce_while(:ok, fn {topic_name, config}, _ ->
-      case @producer.start_producer(topic_name, config) do
+      case @producer.start_producer(state.client, topic_name, config) do
         :ok ->
           {:cont, :ok}
 
@@ -138,10 +144,10 @@ defmodule KafkaBatcher.ConnectionManager do
     end)
   end
 
-  defp prepare_connection do
-    case start_client() do
+  defp prepare_connection(state) do
+    case start_client(state) do
       {:ok, pid} ->
-        case start_producers() do
+        case start_producers(state) do
           :ok -> {:ok, pid}
           :error -> :retry
         end
@@ -156,8 +162,8 @@ defmodule KafkaBatcher.ConnectionManager do
     end
   end
 
-  defp start_client do
-    case @producer.start_client() do
+  defp start_client(%State{} = state) do
+    case @producer.start_client(state.client) do
       {:ok, pid} ->
         {:ok, pid}
 

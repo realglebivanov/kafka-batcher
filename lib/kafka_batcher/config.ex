@@ -32,53 +32,37 @@ defmodule KafkaBatcher.Config do
   @type sasl_mechanism() :: :plain | :scram_sha_256 | :scram_sha_512
   @type sasl_type() :: {sasl_mechanism(), binary(), binary()} | :undefined
 
-  @spec collectors_spec() :: [:supervisor.child_spec()]
-  def collectors_spec do
-    collector_configs = get_configs_by_collector!()
+  @spec general_producer_config(client :: atom()) :: Keyword.t()
+  def general_producer_config(client) do
+    client_config = client |> get_client_config() |> Keyword.get(:kafka, [])
 
-    children_specs =
-      Enum.reduce(
-        collector_configs,
-        [],
-        fn {collector, config}, all_children ->
-          collector_spec = collector.child_spec(config)
-          accum_sup_spec = KafkaBatcher.AccumulatorsPoolSupervisor.child_spec(config)
+    client_producer_config =
+      client_config
+      |> Keyword.take(allowed_producer_keys())
+      |> set_endpoints()
+      |> set_sasl()
+      |> set_ssl()
 
-          [collector_spec, accum_sup_spec | all_children]
-        end
-      )
-
-    conn_manager_spec = KafkaBatcher.ConnectionManager.child_spec()
-    Enum.reverse([conn_manager_spec | children_specs])
-  end
-
-  @spec general_producer_config() :: Keyword.t()
-  def general_producer_config do
-    Application.get_env(:kafka_batcher, :kafka, [])
-    |> Keyword.take(allowed_producer_keys())
-    |> set_endpoints()
-    |> set_sasl()
-    |> set_ssl()
-    |> then(fn config -> Keyword.merge(default_producer_config(), config) end)
+    Keyword.merge(default_producer_config(), client_producer_config)
   end
 
   @doc """
   Return all configured topics with its config.
   """
-  @spec get_configs_by_topic_name() :: list({binary(), Keyword.t()})
-  def get_configs_by_topic_name do
-    get_configs_by_collector!()
+  @spec get_configs_by_topic_name(client :: atom()) :: list({binary(), Keyword.t()})
+  def get_configs_by_topic_name(client) do
+    get_configs_by_collector!(client)
     |> Enum.map(fn {_, config} ->
       {Keyword.fetch!(config, :topic_name), config}
     end)
     |> Enum.into(%{})
   end
 
-  @spec get_configs_by_collector!() :: list({atom(), Keyword.t()})
-  def get_configs_by_collector! do
-    Enum.map(fetch_runtime_configs(), fn {collector, runtime_config} ->
+  @spec get_configs_by_collector!(client :: atom()) :: list({atom(), Keyword.t()})
+  def get_configs_by_collector!(client) do
+    Enum.map(fetch_runtime_configs(client), fn {collector, runtime_config} ->
       config =
-        general_producer_config()
+        general_producer_config(client)
         |> Keyword.merge(get_compile_config!(collector))
         |> Keyword.merge(runtime_config)
 
@@ -92,10 +76,10 @@ defmodule KafkaBatcher.Config do
     end)
   end
 
-  @spec get_collector_config(topic_name :: binary()) :: Keyword.t()
-  def get_collector_config(topic_name) do
-    case get_configs_by_topic_name()[topic_name] do
-      nil -> general_producer_config()
+  @spec get_collector_config(client :: atom(), topic_name :: binary()) :: Keyword.t()
+  def get_collector_config(client, topic_name) do
+    case get_configs_by_topic_name(client)[topic_name] do
+      nil -> general_producer_config(client)
       config -> config
     end
   end
@@ -109,15 +93,12 @@ defmodule KafkaBatcher.Config do
     |> Enum.filter(fn {_, value} -> value != nil end)
   end
 
-  @spec get_endpoints :: list({binary(), non_neg_integer()})
-  def get_endpoints do
-    Application.get_env(:kafka_batcher, :kafka, [])
-    |> get_endpoints()
-  end
-
-  @spec get_endpoints(config :: Keyword.t()) :: list({binary(), non_neg_integer()})
-  def get_endpoints(config) do
-    Keyword.fetch!(config, :endpoints)
+  @spec fetch_endpoints!(client :: atom()) :: list({binary(), non_neg_integer()})
+  def fetch_endpoints!(client) do
+    client
+    |> get_client_config()
+    |> Keyword.get(:kafka, [])
+    |> Keyword.fetch!(:endpoints)
     |> parse_endpoints()
   end
 
@@ -188,7 +169,7 @@ defmodule KafkaBatcher.Config do
   end
 
   defp set_endpoints(config) do
-    Keyword.put(config, :endpoints, get_endpoints(config))
+    Keyword.update!(config, :endpoints, &parse_endpoints/1)
   end
 
   defp set_sasl(config) do
@@ -247,19 +228,22 @@ defmodule KafkaBatcher.Config do
     end
   end
 
-  defp fetch_runtime_configs do
-    Application.get_env(:kafka_batcher, :collectors)
-    |> Enum.map(&fetch_runtime_config/1)
+  defp fetch_runtime_configs(client) do
+    client_config = get_client_config(client)
+
+    for collector <- Keyword.get(client_config, :collectors, []) do
+      case Keyword.fetch(client_config, collector) do
+        {:ok, config} ->
+          {collector, config}
+
+        _ ->
+          {collector, []}
+      end
+    end
   end
 
-  defp fetch_runtime_config(collector_name) do
-    case Application.fetch_env(:kafka_batcher, collector_name) do
-      {:ok, config} ->
-        {collector_name, config}
-
-      _ ->
-        {collector_name, []}
-    end
+  defp get_client_config(client) do
+    Application.get_env(:kafka_batcher, client, [])
   end
 
   defp default_producer_config do

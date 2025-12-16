@@ -6,7 +6,6 @@ if Code.ensure_loaded?(KafkaEx) do
 
     @kafka_ex_client Application.compile_env(:kafka_batcher, :kafka_ex_client, KafkaEx)
     @metadata_response Application.compile_env(:kafka_batcher, :kafka_ex_metadata, KafkaEx.Protocol.Metadata.Response)
-    @client_name :kafka_producer_client
 
     @behaviour KafkaBatcher.Behaviours.Producer
     use KafkaBatcher.Producers.Base
@@ -17,21 +16,21 @@ if Code.ensure_loaded?(KafkaEx) do
 
     ## KafkaEx start worker
     @impl true
-    def start_client do
-      uris = KafkaBatcher.Config.get_endpoints()
+    def start_client(client) do
+      uris = KafkaBatcher.Config.fetch_endpoints!(client)
 
-      @kafka_ex_client.create_worker(@client_name, uris: uris)
+      @kafka_ex_client.create_worker(client, uris: uris)
     end
 
     @impl true
-    def start_producer(_topic_name, _config) do
+    def start_producer(_client, _topic_name, _config) do
       :ok
     end
 
     @impl true
-    def get_partitions_count(topic) do
+    def get_partitions_count(client, topic) do
       count =
-        @kafka_ex_client.metadata(topic: topic, worker_name: @client_name)
+        @kafka_ex_client.metadata(topic: topic, worker_name: client)
         |> @metadata_response.partitions_for_topic(topic)
         |> length()
 
@@ -39,7 +38,7 @@ if Code.ensure_loaded?(KafkaEx) do
     end
 
     @impl true
-    def do_produce(messages, topic, partition, config) do
+    def do_produce(client, messages, topic, partition, config) do
       case @kafka_ex_client.produce(
              %KafkaEx.Protocol.Produce.Request{
                topic: topic,
@@ -47,7 +46,7 @@ if Code.ensure_loaded?(KafkaEx) do
                required_acks: Keyword.get(config, :required_acks),
                messages: transform_messages(messages)
              },
-             worker_name: @client_name
+             worker_name: client
            ) do
         {:ok, _offset} ->
           :ok

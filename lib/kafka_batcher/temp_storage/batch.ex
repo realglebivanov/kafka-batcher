@@ -3,12 +3,13 @@ defmodule KafkaBatcher.TempStorage.Batch do
   The struct used for KafkaBatcher.Behaviours.TempStorage behavior
   """
 
-  defstruct [:messages, :topic, :partition, :producer_config]
+  defstruct [:messages, :client, :topic, :partition, :producer_config]
 
   @type message() :: KafkaBatcher.MessageObject.t()
 
   @type t() :: %__MODULE__{
           messages: [message()],
+          client: atom(),
           topic: String.t(),
           partition: String.t() | nil,
           producer_config: Keyword.t()

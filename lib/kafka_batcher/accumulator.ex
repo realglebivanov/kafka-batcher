@@ -31,8 +31,11 @@ defmodule KafkaBatcher.Accumulator do
   @doc """
   Finds appropriate Accumulator process by topic & partition and dispatches `event` to it
   """
-  def add_event(%MessageObject{} = event, topic_name, partition \\ nil) do
-    GenServer.call(reg_name(topic_name: topic_name, partition: partition), {:add_event, event})
+  def add_event(%MessageObject{} = event, client, topic_name, partition \\ nil) do
+    GenServer.call(
+      reg_name(client: client, topic_name: topic_name, partition: partition),
+      {:add_event, event}
+    )
   catch
     _, _reason ->
       Logger.warning("KafkaBatcher: Couldn't get through to accumulator")
@@ -161,7 +164,13 @@ defmodule KafkaBatcher.Accumulator do
 
   @spec produce_list(messages :: [CollectorBehaviour.event()], state :: State.t()) :: :ok | {:error, any()}
   defp produce_list(messages, state) when is_list(messages) do
-    @producer.produce_list(messages, state.topic_name, state.partition, state.config)
+    @producer.produce_list(
+      state.client,
+      messages,
+      state.topic_name,
+      state.partition,
+      state.config
+    )
   catch
     _, reason ->
       {:error, reason}
@@ -171,6 +180,7 @@ defmodule KafkaBatcher.Accumulator do
     config = Keyword.fetch!(args, :config)
 
     %State{
+      client: Keyword.fetch!(args, :client),
       topic_name: Keyword.fetch!(args, :topic_name),
       partition: Keyword.get(args, :partition),
       config: config,
@@ -184,14 +194,15 @@ defmodule KafkaBatcher.Accumulator do
   end
 
   defp reg_name(args) do
+    client = Keyword.fetch!(args, :client)
     topic_name = Keyword.fetch!(args, :topic_name)
 
     case Keyword.get(args, :partition) do
       nil ->
-        :"#{__MODULE__}.#{topic_name}"
+        :"#{__MODULE__}.#{client}.#{topic_name}"
 
       partition ->
-        :"#{__MODULE__}.#{topic_name}.#{partition}"
+        :"#{__MODULE__}.#{client}.#{topic_name}.#{partition}"
     end
   end
 end

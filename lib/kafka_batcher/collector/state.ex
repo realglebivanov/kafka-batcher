@@ -9,6 +9,7 @@ defmodule KafkaBatcher.Collector.State do
   require Logger
 
   @type t :: %State{
+          client: atom(),
           topic_name: String.t() | nil,
           config: Keyword.t(),
           collect_by_partition: boolean(),
@@ -20,17 +21,21 @@ defmodule KafkaBatcher.Collector.State do
           partitions_count: pos_integer() | nil
         }
 
-  defstruct topic_name: nil,
-            config: [],
-            collect_by_partition: true,
-            collector: nil,
-            # these fields are used to handle case when Kafka went down suddenly
-            locked?: false,
-            last_check_timestamp: nil,
-            # these fields are used to handle case when Kafka is not available at the start
-            ready?: false,
-            timer_ref: nil,
-            partitions_count: nil
+  @enforce_keys [:client]
+  defstruct @enforce_keys ++
+              [
+                topic_name: nil,
+                config: [],
+                collect_by_partition: true,
+                collector: nil,
+                # these fields are used to handle case when Kafka went down suddenly
+                locked?: false,
+                last_check_timestamp: nil,
+                # these fields are used to handle case when Kafka is not available at the start
+                ready?: false,
+                timer_ref: nil,
+                partitions_count: nil
+              ]
 
   @spec add_events(t(), [Utils.event()]) :: {:ok, t()} | {:error, term(), t()}
   def add_events(%State{} = state, events) do
@@ -49,7 +54,7 @@ defmodule KafkaBatcher.Collector.State do
     |> Enum.reduce(:ok, fn %MessageObject{} = event, result ->
       case choose_partition(state, event) do
         {:ok, partition} when result == :ok ->
-          try_to_add_event(event, state.topic_name, partition)
+          try_to_add_event(event, state, partition)
 
         {:ok, partition} ->
           keep_failed_event(result, event, elem(result, 1), partition)
@@ -60,8 +65,8 @@ defmodule KafkaBatcher.Collector.State do
     end)
   end
 
-  defp try_to_add_event(event, topic_name, partition) do
-    case Accumulator.add_event(event, topic_name, partition) do
+  defp try_to_add_event(%MessageObject{} = event, %State{} = state, partition) do
+    case Accumulator.add_event(event, state.client, state.topic_name, partition) do
       :ok -> :ok
       {:error, reason} -> keep_failed_event(:ok, event, reason, partition)
     end
@@ -106,6 +111,7 @@ defmodule KafkaBatcher.Collector.State do
     for {partition, failed_events} <- failed_event_batches do
       TempStorage.save_batch(%TempStorage.Batch{
         messages: Enum.reverse(failed_events),
+        client: state.client,
         topic: state.topic_name,
         partition: partition,
         producer_config: state.config

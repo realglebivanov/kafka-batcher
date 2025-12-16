@@ -11,7 +11,10 @@ defmodule KafkaBatcher.Supervisor do
   end
 
   def init(_args) do
-    children = KafkaBatcher.Config.collectors_spec()
+    children =
+      for {client, _} <- Application.get_all_env(:kafka_batcher) do
+        {KafkaBatcher.Client.Supervisor, client}
+      end
 
     opts = [strategy: :one_for_one]
     Supervisor.init(children, opts)
